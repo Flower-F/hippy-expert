@@ -1,3 +1,3 @@
 # Hippy DOM 原理解析
 
-使用版本为 Hippy3.0
+本专栏会讲解 Hippy DOM 的实现原理。

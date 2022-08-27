@@ -7,7 +7,8 @@ export const sidebar: SidebarConfig = {
       children: [
         '/dom/README.md',
         '/dom/1_dom_node.md',
-        '/dom/2_root_node.md'
+        '/dom/2_diff.md',
+        '/dom/3_root_node.md'
       ]
     }
   ],

@@ -1,10 +1,24 @@
 # DOM Node
 
-打开 /dom/src/dom 目录下的 dom_node.cc 文件，这将是 Hippy DOM 原理解析的开始。说明一下，为了得到更清晰的逻辑路径本文贴出的代码并不完整，基本都是我删减得到的版本。我主要是解读一些逻辑相关的部分，一些比较简单的工具函数就略过不讲了。
+这是 Hippy DOM 实现原理的第一节。打开 /dom/src/dom 目录下的 dom_node.cc 文件，这将是 Hippy DOM 原理解析的开始。
+
+## 开始
+
+这一节主要可以分成三个部分：
+
+- 基础操作
+  - IndexOf
+  - AddChildByRefInfo
+  - DoLayout
+- 事件处理
+  - AddEventListener
+  - RemoveEventListener
+- 样式处理
+  - UpdateStyle
+  - EmplaceStyleMap
+  - Serialize & Deserialize
 
 ## IndexOf
-
-顾名思义就是寻找子节点所在的下标，这里是调用了一个 `checked_numeric_cast` 的方法，我们可以看一下这个方法具体做了什么。
 
 ```cpp
 template<typename SourceType, typename TargetType>
@@ -19,11 +33,12 @@ static constexpr bool numeric_cast(const SourceType& source, TargetType& target)
 }
 ```
 
+顾名思义就是寻找子节点所在的下标，这里是调用了一个 checked_numeric_cast 的方法，我们可以看一下这个方法具体做了什么。
+
 在 C++ 中，我们经常需要把不同类型的数字互相转换，如将一个数字在 long long 和 int 之间转换。但由于各数字的精度不同，当一个数字从**大类型到小类型**转换时就可能导致转换失败。numeric_cast 做的事情就是在转换失败的时候返回一个 false，成功的时候返回 true，使得我们可以人为把控转换的成功与否。
 
 ## AddChildByRefInfo
 
-这个函数简化之后如下所示，核心逻辑也很简单，就是根据 ref_info 上的 relative_to_ref，来决定从 children 数组的什么位置插入子节点（根据 id 插入到某个 child 的左边或右边）。
 
 ```cpp
 int32_t DomNode::AddChildByRefInfo(const std::shared_ptr<DomInfo>& dom_info) {
@@ -54,17 +69,9 @@ int32_t DomNode::AddChildByRefInfo(const std::shared_ptr<DomInfo>& dom_info) {
 }
 ```
 
+这个函数就是根据 ref_info 上的 relative_to_ref 属性，来决定从 children 数组的什么位置插入子节点（插入到某个 child 的左边或右边）。
+
 ## DoLayout
-
-这个函数主要是调用了 CalculateLayout 函数和 TransferLayoutOutputsRecursive 函数。
-
-暂时只需要知道 CalculateLayout 里面执行的是一些关于 flex 布局的操作，与 Hippy Engine 相关。然后我们重点放在 TransferLayoutOutputsRecursive 函数中。
-
-从 TransferLayoutOutputsRecursive 名字可以看出，这个函数一定是递归调用进行布局操作。这里 changed 表示的是布局是否发生了改变，只要任意几何属性发生改变即触发了页面布局的改变，比如 left、hight、margin 等等，这也符合我们对前端的认知。
-
-这里无论 layout_param 还是 layout_obj 都是哈希表，紧接着我们可以看到执行了事件处理操作，具体的事件处理细节在 root_node 文件中，里面涉及到事件的捕获和冒泡，相关的内容我们下次再说。
-
-**根据这里的逻辑我们可以知道，Hippy 的处理方式是先处理父级 DOM 树的渲染，再处理自己的事件，再递归处理子树的渲染，子树的事件，以此类推。**
 
 ```cpp
 void DomNode::TransferLayoutOutputsRecursive(std::vector<std::shared_ptr<DomNode>>& changed_nodes) {
@@ -103,9 +110,17 @@ void DomNode::TransferLayoutOutputsRecursive(std::vector<std::shared_ptr<DomNode
 }
 ```
 
-## AddEventListener
+这个函数主要是调用了 CalculateLayout 函数和 TransferLayoutOutputsRecursive 函数。
 
-这个函数和 Web 里面 addEventListener 的定义类似。这里 event_listener_map_ 是一张用于记录事件 id 的哈希表，哈希表里面的每一个 key 就是一种事件类型，对应的 value 是一个大小为 2 的数组。为什么大小为 2 呢，相信你很容易就能猜到，因为事件分为冒泡和捕获两种类型，需要分开处理。
+暂时只需要知道 CalculateLayout 里面执行的是一些关于 flex 布局的操作，与 Hippy Engine 相关。然后我们重点放在 TransferLayoutOutputsRecursive 函数中。
+
+从 TransferLayoutOutputsRecursive 名字可以看出，这个函数一定是递归调用进行布局操作。这里 changed 表示的是布局是否发生了改变，只要任意几何属性发生改变即触发了页面布局的改变，比如 left、hight、margin 等等，这也符合我们对前端的认知。
+
+这里无论 layout_param 还是 layout_obj 都是哈希表，紧接着我们可以看到执行了事件处理操作，具体的事件处理细节在 root_node 文件中，里面涉及到事件的捕获和冒泡，相关的内容我们下次再说。
+
+根据这里的逻辑我们可以知道，Hippy 的处理方式是先处理父级 DOM 树的布局，再递归处理子树的布局，以此类推。同时，每次完成布局，都需要触发一种类型叫做 layout 的事件。
+
+## AddEventListener
 
 ```cpp
 void DomNode::AddEventListener(const std::string& name,
@@ -134,7 +149,7 @@ void DomNode::AddEventListener(const std::string& name,
 }
 ```
 
-然后再说明一下这里 lock() 的作用。这里 lock() 本质就是尝试获取这个对象的地址，但是不知道对象销毁了没，然后再通过一个条件语句判断，即可保证对象在未被销毁的情况下调用。
+这个函数和 Web 里面 addEventListener 的定义类似。这里 event_listener_map_ 是一张用于记录事件 id 的哈希表，哈希表里面的每一个 key 就是一种事件类型，对应的 value 是一个大小为 2 的数组。为什么大小为 2 呢，相信你很容易就能猜到，因为事件分为冒泡和捕获两种类型，需要分开处理。
 
 ```cpp
 auto root_node = root_node_.lock();
@@ -143,9 +158,9 @@ if (root_node) {
 }
 ```
 
-## RemoveEventListener
+然后再说明一下这里 lock() 的作用。这里 lock() 本质就是尝试获取这个对象的地址，但是不知道对象销毁了没，然后再通过一个条件语句判断，即可保证对象在未被销毁的情况下调用。
 
-这一步做的就是根据 id 和事件类型删除捕获和冒泡的事件。
+## RemoveEventListener
 
 ```cpp
 void DomNode::RemoveEventListener(const std::string& name, uint64_t listener_id) {
@@ -182,9 +197,9 @@ void DomNode::RemoveEventListener(const std::string& name, uint64_t listener_id)
 }
 ```
 
-## EmplaceStyleMap
+这一步做的就是根据 id 和事件类型删除捕获和冒泡的事件。
 
-这个函数涉及到 Hippy 是如何根据指定的 key 插入新的 style：原来没有这个 key，直接尾部插入；原来有这个 key 了，就递归替换掉原来的样式。这个函数主要是调用了 ReplaceStyle 方法，递归进行了 style 的替换。首先我们可以知道这一过程分开处理了数组和对象这两种情况，这也符合 Hippy style 对象既可以是对象也可以是数组的特征。代码中 ToObjectChecked 也好，ToArrayChecked 也好，都只是做了一些类型转换和校验的操作。replaced 变量主要是标记是否完成了整个 style 的遍历，完成之后就会退出递归。
+## EmplaceStyleMap
 
 ```cpp
 void DomNode::EmplaceStyleMap(const std::string& key, const HippyValue& value) {
@@ -203,6 +218,8 @@ void DomNode::EmplaceStyleMap(const std::string& key, const HippyValue& value) {
   }
 }
 ```
+
+这个函数涉及到 Hippy 是如何根据指定的 key 插入 style：原来没有这个 key，直接尾部插入；原来有这个 key 了，就递归替换掉原来的样式。这个函数主要是调用了 ReplaceStyle 方法，递归进行了 style 的替换。
 
 ```cpp
 bool DomNode::ReplaceStyle(HippyValue& style, const std::string& key, const HippyValue& value) {
@@ -235,9 +252,9 @@ bool DomNode::ReplaceStyle(HippyValue& style, const std::string& key, const Hipp
 }
 ```
 
-## UpdateStyle
+首先我们可以知道这一过程分开处理了数组和对象这两种情况，这也符合 Hippy style 对象既可以是对象也可以是数组的特征。代码中 ToObjectChecked 也好，ToArrayChecked 也好，都只是做了一些类型转换和校验的操作。replaced 变量主要是标记是否完成了整个 style 的遍历，完成之后就会退出递归。
 
-这个函数作用就是进行 style 的更新，UpdateObjectStyle 类似于上面的 ReplaceStyle，递归进行 style 的修改。
+## UpdateStyle
 
 ```cpp
 void DomNode::UpdateStyle(const std::unordered_map<std::string,
@@ -267,9 +284,9 @@ void DomNode::UpdateStyle(const std::unordered_map<std::string,
 }
 ```
 
-## Serialize & Deserialize
+这个函数作用就是进行 style 的更新，UpdateObjectStyle 类似于上面的 ReplaceStyle，递归进行 style 的修改。
 
-这两个函数做的就是树形结构的序列化和反序列化操作，但其实主要处理的是 style 和 extStyle。style 指的是原样式，extStyle 指的是预处理之后的样式内容。Serialize 做的就是一些纯粹的赋值操作，目的是将对象标准化；Deserialize 就是将 Serialize 后的对象还原回来。
+## Serialize & Deserialize
 
 ```cpp
 HippyValue DomNode::Serialize() const {
@@ -384,3 +401,5 @@ bool DomNode::Deserialize(HippyValue value) {
   return true;
 }
 ```
+
+这两个函数做的就是树形结构的序列化和反序列化操作，但其实主要处理的是 style 和 extStyle。style 指的是原样式，extStyle 指的是预处理之后的样式内容。Serialize 做的就是一些纯粹的赋值操作，目的是将对象标准化；Deserialize 就是将 Serialize 后的对象还原回来。

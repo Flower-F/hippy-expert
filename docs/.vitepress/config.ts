@@ -16,7 +16,7 @@ export default defineConfig({
     nav: nav(),
 
     editLink: {
-      pattern: 'https://github.com/Flower-F/hippy-expert/main/docs/:path',
+      pattern: 'https://github.com/Flower-F/hippy-expert/edit/main/docs/:path',
       text: 'Edit this page on GitHub'
     },
 
@@ -37,8 +37,8 @@ function sidebarDom() {
       text: 'DOM',
       collapsible: true,
       items: [
-        { text: 'Hippy Dom 原理解析一', link: '/dom/dom-1' },
-        { text: 'Hippy Dom 原理解析二', link: '/dom/dom-2' }
+        { text: 'DOM Node', link: '/dom/1_dom_node' },
+        { text: 'Root Node', link: '/dom/2_root_node' }
       ]
     }
   ]

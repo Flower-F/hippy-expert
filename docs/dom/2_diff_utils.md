@@ -1,4 +1,4 @@
-# Diff
+# Diff Utils
 
 这是 Hippy DOM 实现原理的第二节。打开 /dom/src/dom 目录下的 diff_utils.cc 文件。
 

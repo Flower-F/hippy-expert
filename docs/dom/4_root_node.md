@@ -1,6 +1,6 @@
 # Root Node
 
-这是 Hippy DOM 实现原理的第四节。打开 /dom/src/dom 目录下的 root_node.cc 文件。
+这是 Hippy DOM 实现原理的第四节。打开 /dom/src/dom 目录下的 root_node.cc 文件。这节本来安排的是 dom_event.cc 和 dom_event.h 的内容，但是因为关于 dom_event.cc 本身其实没什么好说的，内部不包含任何逻辑操作，所以我们直接开始讲解 Root Node。
 
 这一节主要是涉及到 DOM 的创建、更新、删除、Diff 算法。
 
@@ -118,36 +118,7 @@ void RootNode::UpdateDomNodes(std::vector<std::shared_ptr<DomInfo>>&& nodes) {
 
 这里的重点是调用 DiffProps 方法比较前后的 style（样式） 和 extStyle（预处理完成后的样式）。记得之前所说的，DiffProps 最终返回的是一个 tuple，第一项是 update_props，第二项是 delete_props。所以这里 get<0>(style_diff_value) 就是拿出 update_props，get<1>(style_diff_value) 就是拿出 delete_props。然后，变量 diff_value（一张哈希表）会依次存储 style_update 的所有内容，以及 ext_update 的所有内容。接下来的删除操作也类似，只不过 delete_props 的数据结构从哈希表换成了 vector。这里使用不同数据结构的原因尚待进一步考究，猜测可能与顺序或者效率相关。最后，触发一个 DomUpdated 事件，并把对应的操作类型 kOpUpdate 加入 dom_operations_ 数组中。另外，这里还有一个值得注意的点是 Update 结束之后并没有直接把 delete_props 删除，而是先通过 delete_props 属性暂时存储着，后续才会执行真正的删除操作。
 
-# MoveDomNodes
-
-```cpp
-void RootNode::MoveDomNodes(std::vector<std::shared_ptr<DomInfo>> &&nodes) {
-  for (const auto& interceptor : interceptors_) {
-    interceptor->OnDomNodeMove(nodes);
-  }
-  std::vector<std::shared_ptr<DomNode>> nodes_to_move;
-  for (const auto& node_info : nodes) {
-      std::shared_ptr<DomNode> parent_node = GetNode(node_info->dom_node->GetPid());
-      if (parent_node == nullptr) {
-          continue;
-      }
-      auto node = parent_node->RemoveChildById(node_info->dom_node->GetId());
-      if (node == nullptr) {
-          continue;
-      }
-      nodes_to_move.push_back(node);
-      parent_node->AddChildByRefInfo(std::make_shared<DomInfo>(node, node_info->ref_info));
-  }
-  for(const auto& node: nodes_to_move) {
-      node->SetRenderInfo({node->GetId(), node->GetPid(), node->GetSelfIndex()});
-  }
-  if (!nodes_to_move.empty()) {
-      dom_operations_.push_back({DomOperation::kOpMove, nodes_to_move});
-  }
-}
-```
-
-# DeleteDomNodes
+## DeleteDomNodes
 
 ```cpp
 void RootNode::DeleteDomNodes(std::vector<std::shared_ptr<DomInfo>>&& nodes) {
@@ -196,7 +167,9 @@ void RootNode::OnDomNodeDeleted(const std::shared_ptr<DomNode> &node) {
 
 这个函数很简单，作用就是递归删除该节点下的所有子节点。
 
-# SyncWithRenderManager
+## SyncWithRenderManager
+
+先从函数名称说起，这里的含义是将 RenderManager 的内容进行同步。
 
 ```cpp
 void RootNode::SyncWithRenderManager(const std::shared_ptr<RenderManager>& render_manager) {
@@ -207,7 +180,7 @@ void RootNode::SyncWithRenderManager(const std::shared_ptr<RenderManager>& rende
 }
 ```
 
-函数内部调用了三个函数，我们依次解析一下这三个函数。
+函数内部调用了三个函数，分别表示批处理 DOM 节点、批处理事件、批处理布局（样式）。我们依次解析一下这三个函数。
 
 ```cpp
 void RootNode::FlushDomOperations(const std::shared_ptr<RenderManager>& render_manager) {
@@ -233,7 +206,31 @@ void RootNode::FlushDomOperations(const std::shared_ptr<RenderManager>& render_m
 }
 ```
 
-这里就是根据前面一直多次提到的 dom_operations_ 数组里面所记录的操作，统一执行**增删移查**操作。函数以 Flush 开头，相信你一定会马上想到 React 中大名鼎鼎的批处理函数 flushBatchedUpdates。flush 的意思就是一股脑、一次性处理掉的意思，这里也就是一次性集中处理掉 dom_operations_ 数组中的操作。
+这里就是根据前面一直多次提到的 dom_operations_ 数组里面所记录的操作，统一执行**增删移查**操作。函数以 Flush 开头，相信你一定会马上想到 React 中大名鼎鼎的批处理函数 flushBatchedUpdates。flush 的意思就是一股脑、一次性处理掉的意思，这里也就是一次性集中处理掉 dom_operations_ 数组中的操作。具体的 CreateRenderNode、DeleteRenderNode 都没有进行重写，可以看前面 Render Manager 那节的内容。UpdateRenderNode 是进行了重写，内容如下。
+
+```cpp
+void RootNode::UpdateRenderNode(const std::shared_ptr<DomNode>& node) {
+  auto dom_manager = dom_manager_.lock();
+  if (!dom_manager) {
+    return;
+  }
+  auto render_manager = dom_manager->GetRenderManager().lock();
+  if (!render_manager) {
+    return;
+  }
+
+  // 更新 layout tree
+  node->ParseLayoutStyleInfo();
+
+  // 更新属性
+  std::vector<std::shared_ptr<DomNode>> nodes;
+  nodes.push_back(node);
+  render_manager->UpdateRenderNode(GetWeakSelf(), std::move(nodes));
+  SyncWithRenderManager(render_manager);
+}
+```
+
+这里是通过递归调用 UpdateRenderNode 函数，不断更新，然后再一次性通过 SyncWithRenderManager 同步前面的操作。
 
 ```cpp
 void RootNode::FlushEventOperations(const std::shared_ptr<RenderManager>& render_manager) {
@@ -258,7 +255,30 @@ void RootNode::FlushEventOperations(const std::shared_ptr<RenderManager>& render
 }
 ```
 
-# HandleEvent
+FlushEventOperations 这个函数比较简单，就是做一些事件监听和移除，这里不多做解析。
+
+```cpp
+
+void RootNode::DoAndFlushLayout(const std::shared_ptr<RenderManager>& render_manager) {
+  // Before Layout
+  render_manager->BeforeLayout(GetWeakSelf());
+  // 触发布局计算
+  std::vector<std::shared_ptr<DomNode>> layout_changed_nodes;
+  DoLayout(layout_changed_nodes);
+  // After Layout
+  render_manager->AfterLayout(GetWeakSelf());
+
+  if (!layout_changed_nodes.empty()) {
+    render_manager->UpdateLayout(GetWeakSelf(), layout_changed_nodes);
+  }
+}
+```
+
+这里调用的是 DOM Node 的 DoLayout 函数，在  DOM Node 那一节我也有介绍。
+
+## HandleEvent
+
+这个函数其实挺重要的，但是源码里面注释非常详细了，我也就不打算多做解释。
 
 ```cpp
 void RootNode::HandleEvent(const std::shared_ptr<DomEvent>& event) {
@@ -338,3 +358,25 @@ void RootNode::HandleEvent(const std::shared_ptr<DomEvent>& event) {
   }
 }
 ```
+
+## Traverse
+
+```cpp
+void RootNode::Traverse(const std::function<void(const std::shared_ptr<DomNode>&)>& on_traverse) {
+  std::stack<std::shared_ptr<DomNode>> stack;
+  stack.push(shared_from_this());
+  while(!stack.empty()) {
+    auto top = stack.top();
+    stack.pop();
+    on_traverse(top);
+    auto children = top->GetChildren();
+    if (!children.empty()) {
+      for (auto it = children.rbegin(); it != children.rend(); ++it) {
+        stack.push(*it);
+      }
+    }
+  }
+}
+```
+
+这个函数就是大家所非常熟悉的前序遍历，只不过是用栈的方式改写了而已。

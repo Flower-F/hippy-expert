@@ -8,7 +8,8 @@ export const sidebar: SidebarConfig = {
         '/dom/README.md',
         '/dom/1_dom_node.md',
         '/dom/2_diff.md',
-        '/dom/3_root_node.md'
+        '/dom/3_render_manager.md',
+        '/dom/4_root_node.md',
       ]
     }
   ],

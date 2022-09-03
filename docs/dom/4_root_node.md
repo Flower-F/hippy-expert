@@ -1,6 +1,6 @@
 # Root Node
 
-这是 Hippy DOM 实现原理的第三节。打开 /dom/src/dom 目录下的 root_node.cc 文件。
+这是 Hippy DOM 实现原理的第四节。打开 /dom/src/dom 目录下的 root_node.cc 文件。
 
 这一节主要是涉及到 DOM 的创建、更新、删除、Diff 算法。
 
@@ -56,7 +56,7 @@ void TaitankLayoutNode::Parser(std::unordered_map<std::string, std::shared_ptr<f
 }
 ```
 
-- AddChildByRefInfo：这个函数在上一篇文章 DOM Node 解析里面有讲到，就是根据 ref_info 上的 relative_to_ref 属性，来决定从 children 数组的什么位置插入子节点
+- AddChildByRefInfo：这个函数在之前的文章 DOM Node 解析里面有讲到，就是根据 ref_info 上的 relative_to_ref 属性，来决定从 children 数组的什么位置插入子节点
 - HandleEvent：这个函数的讲解在下面，目前只需要知道它就是进行事件处理即可。这里是处理了一种类型叫做 DomCreated 的事件，也就是说 DOM 树的创建本身也是一种事件类型。
 
 之后进行了 id、pid、index 的赋值操作，再触发事件 DomTreeCreated，然后再往 dom_operations_ 数组里面插入一个常量标记 kOpCreate 表示创建成功。
@@ -116,7 +116,147 @@ void RootNode::UpdateDomNodes(std::vector<std::shared_ptr<DomInfo>>&& nodes) {
 }
 ```
 
-这里的重点是调用 DiffProps 方法比较前后的 style（样式） 和 extStyle（预处理完成后的样式），还有一个值得注意的点是 Update 结束之后并没有直接把 delete_props 删除，而是先通过 delete_props 属性暂时存储着。
+这里的重点是调用 DiffProps 方法比较前后的 style（样式） 和 extStyle（预处理完成后的样式）。记得之前所说的，DiffProps 最终返回的是一个 tuple，第一项是 update_props，第二项是 delete_props。所以这里 get<0>(style_diff_value) 就是拿出 update_props，get<1>(style_diff_value) 就是拿出 delete_props。然后，变量 diff_value（一张哈希表）会依次存储 style_update 的所有内容，以及 ext_update 的所有内容。接下来的删除操作也类似，只不过 delete_props 的数据结构从哈希表换成了 vector。这里使用不同数据结构的原因尚待进一步考究，猜测可能与顺序或者效率相关。最后，触发一个 DomUpdated 事件，并把对应的操作类型 kOpUpdate 加入 dom_operations_ 数组中。另外，这里还有一个值得注意的点是 Update 结束之后并没有直接把 delete_props 删除，而是先通过 delete_props 属性暂时存储着，后续才会执行真正的删除操作。
+
+# MoveDomNodes
+
+```cpp
+void RootNode::MoveDomNodes(std::vector<std::shared_ptr<DomInfo>> &&nodes) {
+  for (const auto& interceptor : interceptors_) {
+    interceptor->OnDomNodeMove(nodes);
+  }
+  std::vector<std::shared_ptr<DomNode>> nodes_to_move;
+  for (const auto& node_info : nodes) {
+      std::shared_ptr<DomNode> parent_node = GetNode(node_info->dom_node->GetPid());
+      if (parent_node == nullptr) {
+          continue;
+      }
+      auto node = parent_node->RemoveChildById(node_info->dom_node->GetId());
+      if (node == nullptr) {
+          continue;
+      }
+      nodes_to_move.push_back(node);
+      parent_node->AddChildByRefInfo(std::make_shared<DomInfo>(node, node_info->ref_info));
+  }
+  for(const auto& node: nodes_to_move) {
+      node->SetRenderInfo({node->GetId(), node->GetPid(), node->GetSelfIndex()});
+  }
+  if (!nodes_to_move.empty()) {
+      dom_operations_.push_back({DomOperation::kOpMove, nodes_to_move});
+  }
+}
+```
+
+# DeleteDomNodes
+
+```cpp
+void RootNode::DeleteDomNodes(std::vector<std::shared_ptr<DomInfo>>&& nodes) {
+  for (const auto& interceptor : interceptors_) {
+    interceptor->OnDomNodeDelete(nodes);
+  }
+  std::vector<std::shared_ptr<DomNode>> nodes_to_delete;
+  for (const auto & it : nodes) {
+    std::shared_ptr<DomNode> node = GetNode(it->dom_node->GetId());
+    if (node == nullptr) {
+      continue;
+    }
+    nodes_to_delete.push_back(node);
+    std::shared_ptr<DomNode> parent_node = node->GetParent();
+    if (parent_node != nullptr) {
+      parent_node->RemoveChildAt(parent_node->IndexOf(node));
+    }
+    auto event = std::make_shared<DomEvent>(kDomDeleted, node, nullptr);
+    node->HandleEvent(event);
+    OnDomNodeDeleted(node);
+  }
+
+  auto event = std::make_shared<DomEvent>(kDomTreeDeleted, weak_from_this(), nullptr);
+  HandleEvent(event);
+
+  if (!nodes_to_delete.empty()) {
+    dom_operations_.push_back({DomOperation::kOpDelete, nodes_to_delete});
+  }
+}
+```
+
+这里就是使用 nodes_to_delete 数组来存储删除的 props 内容，然后跟前面一样，触发一个事件 DomDeleted。这里与前面不同的点是，前面的方法中触发事件即表明函数的结束，这里还需要执行 OnDomNodeDeleted 函数。原因可以从 OnDomNodeDeleted 函数中看出来。
+
+```cpp
+void RootNode::OnDomNodeDeleted(const std::shared_ptr<DomNode> &node) {
+  if (node) {
+    for (const auto &child : node->GetChildren()) {
+      if (child) {
+        OnDomNodeDeleted(child);
+      }
+    }
+    nodes_.erase(node->GetId());
+  }
+}
+```
+
+这个函数很简单，作用就是递归删除该节点下的所有子节点。
+
+# SyncWithRenderManager
+
+```cpp
+void RootNode::SyncWithRenderManager(const std::shared_ptr<RenderManager>& render_manager) {
+  FlushDomOperations(render_manager);
+  FlushEventOperations(render_manager);
+  DoAndFlushLayout(render_manager);
+  render_manager->EndBatch(GetWeakSelf());
+}
+```
+
+函数内部调用了三个函数，我们依次解析一下这三个函数。
+
+```cpp
+void RootNode::FlushDomOperations(const std::shared_ptr<RenderManager>& render_manager) {
+  for (auto& dom_operation : dom_operations_) {
+    switch (dom_operation.op) {
+      case DomOperation::kOpCreate:
+        render_manager->CreateRenderNode(GetWeakSelf(), std::move(dom_operation.nodes));
+        break;
+      case DomOperation::kOpUpdate:
+        render_manager->UpdateRenderNode(GetWeakSelf(), std::move(dom_operation.nodes));
+        break;
+      case DomOperation::kOpDelete:
+        render_manager->DeleteRenderNode(GetWeakSelf(), std::move(dom_operation.nodes));
+        break;
+      case DomOperation::kOpMove:
+        render_manager->MoveRenderNode(GetWeakSelf(), std::move(dom_operation.nodes));
+        break;
+      default:
+        break;
+    }
+  }
+  dom_operations_.clear();
+}
+```
+
+这里就是根据前面一直多次提到的 dom_operations_ 数组里面所记录的操作，统一执行**增删移查**操作。函数以 Flush 开头，相信你一定会马上想到 React 中大名鼎鼎的批处理函数 flushBatchedUpdates。flush 的意思就是一股脑、一次性处理掉的意思，这里也就是一次性集中处理掉 dom_operations_ 数组中的操作。
+
+```cpp
+void RootNode::FlushEventOperations(const std::shared_ptr<RenderManager>& render_manager) {
+  for (auto& event_operation : event_operations_) {
+    const auto& node = GetNode(event_operation.id);
+    if (node == nullptr) {
+      continue;
+    }
+
+    switch (event_operation.op) {
+      case EventOperation::kOpAdd:
+        render_manager->AddEventListener(GetWeakSelf(), node, event_operation.name);
+        break;
+      case EventOperation::kOpRemove:
+        render_manager->RemoveEventListener(GetWeakSelf(), node, event_operation.name);
+        break;
+      default:
+        break;
+    }
+  }
+  event_operations_.clear();
+}
+```
 
 # HandleEvent
 

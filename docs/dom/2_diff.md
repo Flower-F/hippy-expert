@@ -2,7 +2,7 @@
 
 这是 Hippy DOM 实现原理的第二节。打开 /dom/src/dom 目录下的 diff_utils.cc 文件。
 
-Diff 对于前端来说是一个非常重要的操作，目标是比较新旧对象，找到可复用的部分，然后比对着进行增删改操作。这里 DiffProps 比对的对象是两个哈希表。
+Diff 对于前端来说是一个非常重要的操作，目标是比较新旧对象，找到可复用的部分，然后比对着进行增删改操作。这里 DiffProps 比对的对象是两个哈希表，主要作用就是用来进行 props 属性的更新或删除，最终返回的是一个 tuple，第一项是 update_props，第二项是 delete_props。
 
 ```cpp
 DiffValue DiffUtils::DiffProps(const DomValueMap& old_props_map, const DomValueMap& new_props_map) {
